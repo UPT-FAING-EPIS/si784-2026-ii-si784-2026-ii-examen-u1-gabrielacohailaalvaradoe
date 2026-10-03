@@ -44,7 +44,7 @@ jobs:
         id: snyk_backend
         if: env.SNYK_TOKEN != ''
         continue-on-error: true
-        run: snyk test --file=src/UniversitySocial.Api/UniversitySocial.Api.csproj --package-manager=nuget --severity-threshold=high --json-file-output=reports/snyk-backend.json
+        run: snyk test --file=UniversitySocial.sln --package-manager=nuget --severity-threshold=high --json-file-output=reports/snyk-backend.json
       - name: Snyk frontend dependencies
         id: snyk_frontend
         if: env.SNYK_TOKEN != ''
