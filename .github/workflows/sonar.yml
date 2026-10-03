@@ -47,6 +47,8 @@ jobs:
           /o:"${{ env.SONAR_ORGANIZATION }}"
           /d:sonar.host.url="${{ env.SONAR_HOST_URL }}"
           /d:sonar.token="${{ env.SONAR_TOKEN }}"
+          /d:sonar.qualitygate.wait=true
+          /d:sonar.qualitygate.timeout=300
           /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
           /d:sonar.javascript.lcov.reportPaths="frontend/coverage/lcov.info"
       - run: dotnet build UniversitySocial.sln --configuration Release
@@ -54,11 +56,3 @@ jobs:
         run: dotnet test UniversitySocial.sln --configuration Release --no-build /p:CollectCoverage=true /p:CoverletOutput=coverage.opencover.xml /p:CoverletOutputFormat=opencover
       - name: End analysis
         run: dotnet sonarscanner end /d:sonar.token="${{ env.SONAR_TOKEN }}"
-      - name: Quality Gate
-        uses: SonarSource/sonarqube-quality-gate-action@v1
-        timeout-minutes: 10
-        with:
-          scanMetadataReportFile: .sonarqube/out/.sonar/report-task.txt
-        env:
-          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
