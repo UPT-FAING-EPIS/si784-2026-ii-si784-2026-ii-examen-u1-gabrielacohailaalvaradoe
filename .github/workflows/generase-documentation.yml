@@ -1,0 +1,38 @@
+name: Generate documentation
+
+on:
+  pull_request:
+    paths: ["src/**", "scripts/generate-docs.mjs", ".github/workflows/generase-documentation.yml"]
+  push:
+    branches: [main]
+    paths: ["src/**", "scripts/generate-docs.mjs", ".github/workflows/generase-documentation.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: dotnet tool restore
+      - name: Generate schema from EF Core migrations
+        env:
+          Jwt__Key: documentation-only-key-with-at-least-32-characters
+          ConnectionStrings__Default: Host=localhost;Database=documentation;Username=documentation
+        run: dotnet tool run dotnet-ef migrations script --idempotent --project src/UniversitySocial.Api --output docs/generated/schema.sql
+      - name: Generate dictionary and Mermaid diagrams
+        run: node scripts/generate-docs.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: architecture-documentation
+          path: docs/generated/
+          if-no-files-found: error
+          retention-days: 30

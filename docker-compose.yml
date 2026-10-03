@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-university_social}
+      POSTGRES_USER: ${POSTGRES_USER:-university_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: src/UniversitySocial.Api/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${POSTGRES_DB:-university_social};Username=${POSTGRES_USER:-university_app};Password=${POSTGRES_PASSWORD}
+      Jwt__Key: ${JWT_KEY:?Set JWT_KEY in .env}
+      Jwt__Issuer: UniversitySocial
+      Jwt__Audience: UniversitySocial.Client
+      ApplyMigrations: "true"
+      Demo__AdminEmail: ${DEMO_ADMIN_EMAIL:-admin@university.local}
+      Demo__AdminPassword: ${DEMO_ADMIN_PASSWORD:-}
+      Cors__Origins: http://localhost:5173,http://localhost:8081
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8080
+      NGINX_PORT: "8080"
+    ports:
+      - "8081:8080"
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  postgres_data:

@@ -1,0 +1,94 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Infrastructure]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_postgres_admin_password: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      TF_VAR_jwt_key: ${{ secrets.JWT_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: dotnet test UniversitySocial.sln --configuration Release
+      - run: npm ci --prefix frontend && npm run build --prefix frontend
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.2
+      - name: Terraform init
+        run: >-
+          terraform -chdir=infra init
+          -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}"
+          -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+          -backend-config="container_name=${{ vars.TF_STATE_CONTAINER }}"
+          -backend-config="key=university-social.tfstate"
+      - name: Read infrastructure outputs
+        id: infra
+        shell: bash
+        run: |
+          echo "registry=$(terraform -chdir=infra output -raw container_registry_login_server)" >> "$GITHUB_OUTPUT"
+          echo "registry_name=$(terraform -chdir=infra output -raw container_registry_name)" >> "$GITHUB_OUTPUT"
+      - name: Build and push images
+        env:
+          REGISTRY: ${{ steps.infra.outputs.registry }}
+          REGISTRY_NAME: ${{ steps.infra.outputs.registry_name }}
+        run: |
+          az acr login --name "$REGISTRY_NAME"
+          docker build -f src/UniversitySocial.Api/Dockerfile -t "$REGISTRY/university-social-backend:${GITHUB_SHA}" .
+          docker build -f frontend/Dockerfile -t "$REGISTRY/university-social-frontend:${GITHUB_SHA}" .
+          docker push "$REGISTRY/university-social-backend:${GITHUB_SHA}"
+          docker push "$REGISTRY/university-social-frontend:${GITHUB_SHA}"
+      - name: Apply application revision and database migration configuration
+        env:
+          REGISTRY: ${{ steps.infra.outputs.registry }}
+        run: >-
+          terraform -chdir=infra apply -auto-approve -input=false
+          -var="backend_image=${REGISTRY}/university-social-backend:${GITHUB_SHA}"
+          -var="frontend_image=${REGISTRY}/university-social-frontend:${GITHUB_SHA}"
+          -var="container_target_port=8080"
+      - name: Verify public application
+        id: verify
+        shell: bash
+        run: |
+          URL=$(terraform -chdir=infra output -raw frontend_url)
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error "$URL" > /dev/null; then
+              echo "url=$URL" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          exit 1
+      - name: Deployment summary
+        run: echo "Application URL ${{ steps.verify.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"

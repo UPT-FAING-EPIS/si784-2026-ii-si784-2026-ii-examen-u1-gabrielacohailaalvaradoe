@@ -1,0 +1,79 @@
+name: Snyk and Semgrep security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: mkdir -p reports
+      - run: dotnet restore UniversitySocial.sln
+      - run: npm ci --prefix frontend
+      - name: Semgrep
+        id: semgrep
+        continue-on-error: true
+        run: |
+          pip install semgrep
+          semgrep scan --config auto --severity ERROR --error --sarif --output reports/semgrep.sarif .
+      - name: Install Snyk CLI
+        if: env.SNYK_TOKEN != ''
+        run: npm install --global snyk
+      - name: Snyk backend dependencies
+        id: snyk_backend
+        if: env.SNYK_TOKEN != ''
+        continue-on-error: true
+        run: snyk test --file=src/UniversitySocial.Api/UniversitySocial.Api.csproj --package-manager=nuget --severity-threshold=high --json-file-output=reports/snyk-backend.json
+      - name: Snyk frontend dependencies
+        id: snyk_frontend
+        if: env.SNYK_TOKEN != ''
+        continue-on-error: true
+        run: snyk test --file=frontend/package-lock.json --severity-threshold=high --json-file-output=reports/snyk-frontend.json
+      - name: Build backend image
+        run: docker build -f src/UniversitySocial.Api/Dockerfile -t university-social-backend:scan .
+      - name: Snyk container
+        id: snyk_container
+        if: env.SNYK_TOKEN != ''
+        continue-on-error: true
+        run: snyk container test university-social-backend:scan --file=src/UniversitySocial.Api/Dockerfile --severity-threshold=high --json-file-output=reports/snyk-container.json
+      - name: Record missing Snyk configuration
+        if: env.SNYK_TOKEN == ''
+        run: echo '{"error":"SNYK_TOKEN secret is not configured"}' > reports/snyk-not-configured.json
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: reports/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce security gates
+        if: always()
+        shell: bash
+        run: |
+          test -n "$SNYK_TOKEN" || { echo "SNYK_TOKEN secret is required"; exit 1; }
+          test "${{ steps.semgrep.outcome }}" = "success" || exit 1
+          test "${{ steps.snyk_backend.outcome }}" = "success" || exit 1
+          test "${{ steps.snyk_frontend.outcome }}" = "success" || exit 1
+          test "${{ steps.snyk_container.outcome }}" = "success" || exit 1

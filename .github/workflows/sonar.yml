@@ -1,0 +1,62 @@
+name: Sonar analysis
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Validate Sonar configuration
+        shell: bash
+        run: |
+          test -n "$SONAR_TOKEN" || { echo "SONAR_TOKEN secret is required"; exit 1; }
+          test -n "$SONAR_HOST_URL" || { echo "SONAR_HOST_URL variable is required"; exit 1; }
+          test -n "$SONAR_ORGANIZATION" || { echo "SONAR_ORGANIZATION variable is required"; exit 1; }
+          test -n "$SONAR_PROJECT_KEY" || { echo "SONAR_PROJECT_KEY variable is required"; exit 1; }
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: dotnet tool install --global dotnet-sonarscanner
+      - name: Begin analysis
+        run: >-
+          dotnet sonarscanner begin
+          /k:"${{ env.SONAR_PROJECT_KEY }}"
+          /o:"${{ env.SONAR_ORGANIZATION }}"
+          /d:sonar.host.url="${{ env.SONAR_HOST_URL }}"
+          /d:sonar.token="${{ env.SONAR_TOKEN }}"
+          /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
+          /d:sonar.javascript.lcov.reportPaths="frontend/coverage/lcov.info"
+      - run: dotnet build UniversitySocial.sln --configuration Release
+      - name: Test with coverage
+        run: dotnet test UniversitySocial.sln --configuration Release --no-build /p:CollectCoverage=true /p:CoverletOutput=coverage.opencover.xml /p:CoverletOutputFormat=opencover
+      - name: End analysis
+        run: dotnet sonarscanner end /d:sonar.token="${{ env.SONAR_TOKEN }}"
+      - name: Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}

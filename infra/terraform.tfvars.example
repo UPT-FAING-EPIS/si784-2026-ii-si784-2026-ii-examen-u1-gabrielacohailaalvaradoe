@@ -1,0 +1,4 @@
+location            = "westus"
+resource_group_name = "rg-university-social"
+name_prefix         = "university-social"
+# Pass postgres_admin_password and jwt_key only through TF_VAR_* environment variables.

@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+**/TestResults/
+**/coverage/
+frontend/node_modules/
+frontend/dist/
+.env
+*.user
+*.suo
+.idea/
+.vscode/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+reports/
+docs/generated/schema.sql
